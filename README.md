@@ -34,14 +34,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ewankukus/vpn-pavlik/main/in
 
 Скрипт задаст вопросы:
 
-| Поле | Пример |
+| Поле | Описание |
 |---|---|
-| Домен Reality/Nginx | `domain1.ru` |
-| Домен панели | `domain2.ru` |
-| Email Let's Encrypt | `you@gmail.com` |
-| Секретный путь | `/xk92mf` |
-| Логин панели | `admin` |
-| Пароль панели | минимум 8 символов |
+| Домен Reality/Nginx | домен сайта-камуфляжа, например `domain1.ru` |
+| Домен панели | домен для входа в панель, например `domain2.ru` |
+| Email Let's Encrypt | email для SSL-сертификатов |
+| Секретный путь | произвольный путь к панели, например `/xk92mf` |
+| Логин панели | придумай логин, по умолчанию `admin` |
+| Пароль панели | придумай пароль, минимум 8 символов |
 
 Установка занимает ~5 минут. В конце скрипт показывает URL панели и credentials.
 
@@ -52,8 +52,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ewankukus/vpn-pavlik/main/in
 ### Вход в панель
 
 ```
-https://domain2.ru/xk92mf
+https://<домен панели>/<секретный путь>
 ```
+
+URL, логин и пароль скрипт выводит в конце установки и сохраняет в `/root/vpn-install-info.txt`.
 
 ### VLESS + Reality
 
