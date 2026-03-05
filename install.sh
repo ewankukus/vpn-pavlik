@@ -28,7 +28,7 @@ step()  {
 trap 'echo ""; warn "Установка прервана."; exit 1' INT TERM
 
 # ================================================================
-# Запрос SSL сертификата
+# Получение SSL сертификата через certbot
 # ================================================================
 get_ssl_cert() {
     local domain=$1
@@ -63,13 +63,28 @@ BANNER
 echo -e "${NC}"
 
 read -rp  "$(echo -e "${YELLOW}Домен для Reality/Nginx (например: domain1.ru):         ${NC}")" REALITY_DOMAIN
-read -rp  "$(echo -e "${YELLOW}Домен для панели 3X-UI  (например: domain2.ru):         ${NC}")" PANEL_DOMAIN
 read -rp  "$(echo -e "${YELLOW}Email для Let's Encrypt:                                ${NC}")" LE_EMAIL
 read -rp  "$(echo -e "${YELLOW}Секретный путь к панели (например: /xk92mf):            ${NC}")" PANEL_PATH
 read -rp  "$(echo -e "${YELLOW}Логин для панели 3X-UI  [по умолч.: admin]:             ${NC}")" PANEL_USER
 PANEL_USER=${PANEL_USER:-admin}
 read -rsp "$(echo -e "${YELLOW}Пароль для панели 3X-UI (мин. 8 символов):             ${NC}")" PANEL_PASS
 echo ""
+echo ""
+echo -e "${YELLOW}Режим панели:${NC}"
+echo "  1) Domain — панель за Nginx (https://domain/path), нужен отдельный домен"
+echo "  2) IP     — панель напрямую (https://IP:порт/path), домен не нужен"
+read -rp "$(echo -e "${YELLOW}Выберите режим [1/2]:                                   ${NC}")" MODE_INPUT
+echo ""
+
+if [[ "$MODE_INPUT" == "1" ]]; then
+    PANEL_MODE="domain"
+    read -rp "$(echo -e "${YELLOW}Домен для панели 3X-UI  (например: domain2.ru):         ${NC}")" PANEL_DOMAIN
+elif [[ "$MODE_INPUT" == "2" ]]; then
+    PANEL_MODE="ip"
+    PANEL_DOMAIN=""
+else
+    error "Выберите 1 или 2"
+fi
 
 # ================================================================
 # Валидация ввода
@@ -80,13 +95,17 @@ validate_domain() {
 }
 
 [[ -z "$REALITY_DOMAIN" ]] && error "Домен Reality не может быть пустым"
-[[ -z "$PANEL_DOMAIN" ]]   && error "Домен панели не может быть пустым"
 [[ -z "$LE_EMAIL" ]]        && error "Email не может быть пустым"
 [[ -z "$PANEL_PATH" ]]      && error "Секретный путь не может быть пустым"
 [[ -z "$PANEL_PASS" ]]      && error "Пароль не может быть пустым"
 [[ ${#PANEL_PASS} -lt 8 ]]  && error "Пароль должен быть не менее 8 символов"
 validate_domain "$REALITY_DOMAIN" || error "Невалидный домен: $REALITY_DOMAIN"
-validate_domain "$PANEL_DOMAIN"   || error "Невалидный домен: $PANEL_DOMAIN"
+[[ "$PANEL_USER" =~ ^[a-zA-Z0-9_-]+$ ]] || error "Логин может содержать только буквы, цифры, _ и -"
+
+if [[ "$PANEL_MODE" == "domain" ]]; then
+    [[ -z "$PANEL_DOMAIN" ]] && error "Домен панели не может быть пустым"
+    validate_domain "$PANEL_DOMAIN" || error "Невалидный домен: $PANEL_DOMAIN"
+fi
 
 # Добавить / в начало пути если нет
 [[ "$PANEL_PATH" != /* ]] && PANEL_PATH="/$PANEL_PATH"
@@ -98,7 +117,11 @@ PANEL_PORT=54321
 
 info "Параметры установки:"
 echo "  Reality домен : $REALITY_DOMAIN"
-echo "  Панель домен  : $PANEL_DOMAIN"
+if [[ "$PANEL_MODE" == "domain" ]]; then
+    echo "  Панель домен  : $PANEL_DOMAIN"
+else
+    echo "  Режим панели  : IP (порт $PANEL_PORT)"
+fi
 echo "  Email         : $LE_EMAIL"
 echo "  Путь панели   : $PANEL_PATH"
 echo "  Порт Xray     : $XRAY_PORT"
@@ -167,12 +190,20 @@ step "3 — Настройка UFW"
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow 22/tcp    comment 'SSH'
-ufw allow 80/tcp    comment 'HTTP certbot'
-ufw allow 443/tcp   comment 'HTTPS Nginx'
+ufw allow 22/tcp             comment 'SSH'
+ufw allow 80/tcp             comment 'HTTP certbot'
+ufw allow 443/tcp            comment 'HTTPS Nginx'
 ufw allow "$XRAY_PORT"/tcp   comment 'Xray VLESS Reality'
 ufw allow "$TROJAN_PORT"/tcp comment 'Trojan Reality'
-ufw allow from 127.0.0.1 to any port "$PANEL_PORT" comment '3X-UI panel local only'
+
+if [[ "$PANEL_MODE" == "domain" ]]; then
+    # Панель доступна только локально — nginx проксирует снаружи
+    ufw allow from 127.0.0.1 to any port "$PANEL_PORT" comment '3X-UI panel local only'
+else
+    # Панель доступна напрямую по IP
+    ufw allow "$PANEL_PORT"/tcp comment '3X-UI panel'
+fi
+
 echo "y" | ufw enable || true
 log "UFW настроен"
 
@@ -232,10 +263,13 @@ log "Сайт-камуфляж создан"
 step "6 — Получение SSL сертификатов"
 
 # Временный Nginx для certbot challenge
+CERTBOT_DOMAINS="$REALITY_DOMAIN"
+[[ "$PANEL_MODE" == "domain" ]] && CERTBOT_DOMAINS="$REALITY_DOMAIN $PANEL_DOMAIN"
+
 cat > /etc/nginx/sites-available/certbot-temp << NGINXEOF
 server {
     listen 80;
-    server_name $REALITY_DOMAIN $PANEL_DOMAIN;
+    server_name $CERTBOT_DOMAINS;
     root /var/www/html;
     location /.well-known/acme-challenge/ { root /var/www/html; }
 }
@@ -246,7 +280,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
 get_ssl_cert "$REALITY_DOMAIN"
-get_ssl_cert "$PANEL_DOMAIN"
+[[ "$PANEL_MODE" == "domain" ]] && get_ssl_cert "$PANEL_DOMAIN"
 
 rm -f /etc/nginx/sites-enabled/certbot-temp /etc/nginx/sites-available/certbot-temp
 log "SSL сертификаты получены"
@@ -264,14 +298,12 @@ curl -fsSL --max-time 60 \
     https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh \
     -o "$INSTALL_SCRIPT" \
     || error "Не удалось загрузить установщик 3X-UI (проверьте интернет-соединение)"
-# Передаём "n" чтобы пропустить интерактивный SSL-wizard установщика
 bash "$INSTALL_SCRIPT" <<< "n"
 rm -f "$INSTALL_SCRIPT"
 
 systemctl enable x-ui
 systemctl start x-ui || true
 
-# Возвращаем Nginx
 systemctl start nginx || true
 log "3X-UI установлен"
 
@@ -305,11 +337,33 @@ else
     warn "Не удалось создать bcrypt хеш — смените пароль в панели вручную"
 fi
 
-# Порт, путь, отключение встроенного SSL (используем Nginx)
+# Порт и путь — всегда наши
 sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webPort';     INSERT INTO settings(key,value) VALUES('webPort','$PANEL_PORT');"
 sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webBasePath'; INSERT INTO settings(key,value) VALUES('webBasePath','$PANEL_PATH');"
-sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webCertFile'; INSERT INTO settings(key,value) VALUES('webCertFile','');"
-sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webKeyFile';  INSERT INTO settings(key,value) VALUES('webKeyFile','');"
+
+if [[ "$PANEL_MODE" == "domain" ]]; then
+    # Nginx обслуживает SSL — x-ui работает plain HTTP
+    sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webCertFile'; INSERT INTO settings(key,value) VALUES('webCertFile','');"
+    sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webKeyFile';  INSERT INTO settings(key,value) VALUES('webKeyFile','');"
+    # IP-сертификат от установщика 3X-UI нам не нужен.
+    # Отключаем acme.sh задание: иначе каждые 6 дней оно падает
+    # (порт 80 занят nginx) и перезапускает x-ui.
+    SERVER_IP_TMP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+    [[ -n "$SERVER_IP_TMP" ]] && ~/.acme.sh/acme.sh --remove -d "$SERVER_IP_TMP" --ecc 2>/dev/null || true
+    crontab -l 2>/dev/null | grep -v acme.sh | crontab - 2>/dev/null || true
+else
+    # IP режим: x-ui обслуживает SSL сам через IP-сертификат от установщика.
+    # Настраиваем acme.sh на корректное обновление: останавливаем nginx
+    # перед renewal (нужен порт 80 для standalone), запускаем после.
+    SERVER_IP_TMP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+    if [[ -n "$SERVER_IP_TMP" && -f ~/.acme.sh/acme.sh ]]; then
+        ~/.acme.sh/acme.sh --install-cert -d "$SERVER_IP_TMP" \
+            --pre-hook  "systemctl stop nginx" \
+            --post-hook "systemctl start nginx" \
+            --reloadcmd "systemctl restart x-ui" \
+            --ecc 2>/dev/null || true
+    fi
+fi
 
 systemctl start x-ui
 
@@ -335,7 +389,7 @@ ssl_session_cache   shared:SSL:10m;
 ssl_session_timeout 10m;
 EOF
 
-# ---- Reality домен (сайт-камуфляж) ----
+# ---- Reality домен (сайт-камуфляж) — всегда ----
 cat > "/etc/nginx/sites-available/$REALITY_DOMAIN" << NGINXEOF
 server {
     listen 80;
@@ -362,8 +416,11 @@ server {
 }
 NGINXEOF
 
-# ---- Панель домен (reverse proxy к 3X-UI) ----
-cat > "/etc/nginx/sites-available/$PANEL_DOMAIN" << NGINXEOF
+ln -sf "/etc/nginx/sites-available/$REALITY_DOMAIN" /etc/nginx/sites-enabled/
+
+# ---- Панель домен (только в domain режиме) ----
+if [[ "$PANEL_MODE" == "domain" ]]; then
+    cat > "/etc/nginx/sites-available/$PANEL_DOMAIN" << NGINXEOF
 server {
     listen 80;
     server_name $PANEL_DOMAIN;
@@ -396,13 +453,14 @@ server {
 }
 NGINXEOF
 
-ln -sf "/etc/nginx/sites-available/$REALITY_DOMAIN" /etc/nginx/sites-enabled/
-ln -sf "/etc/nginx/sites-available/$PANEL_DOMAIN"   /etc/nginx/sites-enabled/
+    ln -sf "/etc/nginx/sites-available/$PANEL_DOMAIN" /etc/nginx/sites-enabled/
+fi
+
 rm -f /etc/nginx/sites-enabled/default
 
 nginx -t || error "Ошибка конфигурации Nginx"
 systemctl reload nginx
-log "Nginx настроен для обоих доменов"
+log "Nginx настроен"
 
 # ================================================================
 # Шаг 10: Автообновление SSL сертификатов
@@ -529,6 +587,12 @@ SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
 [[ -z "$SERVER_IP" ]] && SERVER_IP=$(hostname -I | awk '{print $1}')
 [[ -z "$SERVER_IP" ]] && SERVER_IP="<unknown>"
 
+if [[ "$PANEL_MODE" == "domain" ]]; then
+    PANEL_URL="https://$PANEL_DOMAIN$PANEL_PATH"
+else
+    PANEL_URL="https://$SERVER_IP:$PANEL_PORT$PANEL_PATH"
+fi
+
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║            УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО                   ║${NC}"
@@ -539,7 +603,7 @@ echo "  IP сервера    : $SERVER_IP"
 echo "  Reality домен : $REALITY_DOMAIN"
 echo ""
 echo -e "${BLUE}━━━ Панель управления 3X-UI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "  URL           : https://$PANEL_DOMAIN$PANEL_PATH"
+echo "  URL           : $PANEL_URL"
 echo "  Логин         : $PANEL_USER"
 echo "  Пароль        : $PANEL_PASS"
 echo ""
@@ -555,7 +619,6 @@ echo ""
 echo -e "${YELLOW}Параметры также сохранены в /root/vpn-install-info.txt${NC}"
 echo ""
 
-# Сохраняем параметры в файл
 cat > /root/vpn-install-info.txt << INFOEOF
 VPN TOPGUN — параметры установки
 ====================================
@@ -564,7 +627,7 @@ IP сервера        : $SERVER_IP
 Reality домен     : $REALITY_DOMAIN
 
 Панель 3X-UI:
-  URL             : https://$PANEL_DOMAIN$PANEL_PATH
+  URL             : $PANEL_URL
   Логин           : $PANEL_USER
   Пароль          : $PANEL_PASS
 
