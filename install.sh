@@ -9,22 +9,25 @@ set -euo pipefail
 # ================================================================
 # Цвета и вспомогательные функции
 # ================================================================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+NC=$'\033[0m'
 
-log()   { echo -e "${GREEN}[✓]${NC} $1"; }
-info()  { echo -e "${BLUE}[i]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+log()   { echo "${GREEN}[✓]${NC} $1"; }
+info()  { echo "${BLUE}[i]${NC} $1"; }
+warn()  { echo "${YELLOW}[!]${NC} $1"; }
+error() { echo "${RED}[✗]${NC} $1"; exit 1; }
 step()  {
-    echo -e "\n${BLUE}══════════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Шаг $1${NC}"
-    echo -e "${BLUE}══════════════════════════════════════════${NC}"
+    echo ""
+    echo "${BLUE}══════════════════════════════════════════${NC}"
+    echo "${BLUE}  Шаг $1${NC}"
+    echo "${BLUE}══════════════════════════════════════════${NC}"
 }
 
+INSTALL_SCRIPT=""
+trap 'rm -f "$INSTALL_SCRIPT"' EXIT
 trap 'echo ""; warn "Установка прервана."; exit 1' INT TERM
 
 # ================================================================
@@ -54,35 +57,35 @@ fi
 # ================================================================
 # Ввод параметров
 # ================================================================
-echo -e "${BLUE}"
+echo "${BLUE}"
 cat << 'BANNER'
   ╔══════════════════════════════════════════╗
   ║          VPN TOPGUN — установка          ║
   ╚══════════════════════════════════════════╝
 BANNER
-echo -e "${NC}"
+echo "${NC}"
 
-read -rp  "$(echo -e "${YELLOW}Домен для Reality/Nginx (например: domain1.ru):         ${NC}")" REALITY_DOMAIN
-read -rp  "$(echo -e "${YELLOW}Email для Let's Encrypt:                                ${NC}")" LE_EMAIL
-read -rp  "$(echo -e "${YELLOW}Логин для панели 3X-UI  [по умолч.: admin]:             ${NC}")" PANEL_USER
+read -rp  "${YELLOW}Домен для Reality/Nginx (например: domain1.ru):         ${NC}" REALITY_DOMAIN
+read -rp  "${YELLOW}Email для Let's Encrypt:                                ${NC}" LE_EMAIL
+read -rp  "${YELLOW}Логин для панели 3X-UI  [по умолч.: admin]:             ${NC}" PANEL_USER
 PANEL_USER=${PANEL_USER:-admin}
-read -rsp "$(echo -e "${YELLOW}Пароль для панели 3X-UI (мин. 8 символов):             ${NC}")" PANEL_PASS
+read -rsp "${YELLOW}Пароль для панели 3X-UI (мин. 8 символов):             ${NC}" PANEL_PASS
 echo ""
 echo ""
-echo -e "${YELLOW}Режим панели:${NC}"
+echo "${YELLOW}Режим панели:${NC}"
 echo "  1) Domain — панель за Nginx (https://domain2.ru), нужен отдельный домен"
 echo "  2) IP     — панель напрямую (https://IP:порт/путь), домен не нужен"
-read -rp "$(echo -e "${YELLOW}Выберите режим [1/2]:                                   ${NC}")" MODE_INPUT
+read -rp "${YELLOW}Выберите режим [1/2]:                                   ${NC}" MODE_INPUT
 echo ""
 
 if [[ "$MODE_INPUT" == "1" ]]; then
     PANEL_MODE="domain"
-    read -rp "$(echo -e "${YELLOW}Домен для панели 3X-UI  (например: domain2.ru):         ${NC}")" PANEL_DOMAIN
+    read -rp "${YELLOW}Домен для панели 3X-UI  (например: domain2.ru):         ${NC}" PANEL_DOMAIN
     PANEL_PATH="/"
 elif [[ "$MODE_INPUT" == "2" ]]; then
     PANEL_MODE="ip"
     PANEL_DOMAIN=""
-    read -rp "$(echo -e "${YELLOW}Секретный путь к панели (например: /xk92mf):            ${NC}")" PANEL_PATH
+    read -rp "${YELLOW}Секретный путь к панели (например: /xk92mf):            ${NC}" PANEL_PATH
 else
     error "Выберите 1 или 2"
 fi
@@ -101,10 +104,12 @@ validate_domain() {
 [[ ${#PANEL_PASS} -lt 8 ]]  && error "Пароль должен быть не менее 8 символов"
 validate_domain "$REALITY_DOMAIN" || error "Невалидный домен: $REALITY_DOMAIN"
 [[ "$PANEL_USER" =~ ^[a-zA-Z0-9_-]+$ ]] || error "Логин может содержать только буквы, цифры, _ и -"
+[[ "$LE_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] || error "Невалидный email: $LE_EMAIL"
 
 if [[ "$PANEL_MODE" == "domain" ]]; then
     [[ -z "$PANEL_DOMAIN" ]] && error "Домен панели не может быть пустым"
     validate_domain "$PANEL_DOMAIN" || error "Невалидный домен: $PANEL_DOMAIN"
+    [[ "$PANEL_DOMAIN" == "$REALITY_DOMAIN" ]] && error "Домен панели должен отличаться от домена Reality"
 else
     [[ -z "$PANEL_PATH" ]] && error "Секретный путь не может быть пустым"
     # Добавить / в начало пути если нет
@@ -115,6 +120,9 @@ fi
 XRAY_PORT=8443
 TROJAN_PORT=2053
 PANEL_PORT=$(shuf -i 10000-65000 -n 1)
+while ss -tlnH 2>/dev/null | grep -q ":${PANEL_PORT}"; do
+    PANEL_PORT=$(shuf -i 10000-65000 -n 1)
+done
 
 info "Параметры установки:"
 echo "  Reality домен : $REALITY_DOMAIN"
@@ -143,8 +151,8 @@ apt-get update -q
 apt-get upgrade -yq
 apt-get install -yq \
     curl wget unzip jq ufw fail2ban \
-    certbot python3-certbot-nginx nginx sqlite3 \
-    python3-bcrypt \
+    certbot nginx sqlite3 \
+    python3-bcrypt python3-systemd \
     ca-certificates gnupg lsb-release
 log "Система обновлена, пакеты установлены"
 
@@ -181,7 +189,8 @@ net.ipv4.tcp_syncookies = 1
 EOF
 
 modprobe tcp_bbr 2>/dev/null || true
-sysctl -p /etc/sysctl.d/99-vpn-optimize.conf > /dev/null 2>&1 || true
+sysctl -p /etc/sysctl.d/99-vpn-optimize.conf > /dev/null 2>&1 \
+    || warn "Некоторые параметры ядра не применились (проверьте: sysctl -p /etc/sysctl.d/99-vpn-optimize.conf)"
 log "Ядро оптимизировано, BBR включён"
 
 # ================================================================
@@ -205,7 +214,7 @@ else
     ufw allow "$PANEL_PORT"/tcp comment '3X-UI panel'
 fi
 
-echo "y" | ufw enable || true
+echo "y" | ufw enable || warn "UFW не удалось включить — проверьте наличие iptables (контейнер?)"
 log "UFW настроен"
 
 # ================================================================
@@ -217,7 +226,7 @@ cat > /etc/fail2ban/jail.local << 'EOF'
 bantime  = 3600
 findtime = 600
 maxretry = 5
-backend  = systemd
+backend  = auto
 
 [sshd]
 enabled  = true
@@ -264,21 +273,22 @@ log "Сайт-камуфляж создан"
 step "6 — Получение SSL сертификатов"
 
 # Временный Nginx для certbot challenge
+mkdir -p /var/www/html
 CERTBOT_DOMAINS="$REALITY_DOMAIN"
 [[ "$PANEL_MODE" == "domain" ]] && CERTBOT_DOMAINS="$REALITY_DOMAIN $PANEL_DOMAIN"
 
 cat > /etc/nginx/sites-available/certbot-temp << NGINXEOF
 server {
     listen 80;
+    listen [::]:80;
     server_name $CERTBOT_DOMAINS;
     root /var/www/html;
-    location /.well-known/acme-challenge/ { root /var/www/html; }
 }
 NGINXEOF
 
 ln -sf /etc/nginx/sites-available/certbot-temp /etc/nginx/sites-enabled/certbot-temp
 rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
+nginx -t && systemctl restart nginx
 
 get_ssl_cert "$REALITY_DOMAIN"
 [[ "$PANEL_MODE" == "domain" ]] && get_ssl_cert "$PANEL_DOMAIN"
@@ -299,8 +309,10 @@ curl -fsSL --max-time 60 \
     https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh \
     -o "$INSTALL_SCRIPT" \
     || error "Не удалось загрузить установщик 3X-UI (проверьте интернет-соединение)"
-bash "$INSTALL_SCRIPT" <<< "n"
+bash "$INSTALL_SCRIPT" <<< "n" \
+    || error "Установщик 3X-UI завершился с ошибкой — проверьте: journalctl -u x-ui"
 rm -f "$INSTALL_SCRIPT"
+INSTALL_SCRIPT=""
 
 systemctl enable x-ui
 systemctl start x-ui || true
@@ -318,7 +330,7 @@ X_UI_DB="/etc/x-ui/x-ui.db"
 # Важно: x-ui хранит настройки в памяти и сбрасывает их в БД при остановке.
 # Если писать в БД пока он работает — он перетрёт наши изменения при shutdown.
 info "Ожидание инициализации 3X-UI..."
-for i in $(seq 1 60); do
+for i in {1..60}; do
     sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1 && break
     echo -ne "\r  Ожидание БД... [${i}/60]   "
     sleep 1
@@ -342,6 +354,9 @@ fi
 sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webPort';     INSERT INTO settings(key,value) VALUES('webPort','$PANEL_PORT');"
 sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webBasePath'; INSERT INTO settings(key,value) VALUES('webBasePath','$PANEL_PATH');"
 
+# Получаем IP сервера один раз — нужен для acme.sh в обоих режимах
+SERVER_IP_TMP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+
 if [[ "$PANEL_MODE" == "domain" ]]; then
     # Nginx обслуживает SSL — x-ui работает plain HTTP
     sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webCertFile'; INSERT INTO settings(key,value) VALUES('webCertFile','');"
@@ -349,14 +364,12 @@ if [[ "$PANEL_MODE" == "domain" ]]; then
     # IP-сертификат от установщика 3X-UI нам не нужен.
     # Отключаем acme.sh задание: иначе каждые 6 дней оно падает
     # (порт 80 занят nginx) и перезапускает x-ui.
-    SERVER_IP_TMP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
     [[ -n "$SERVER_IP_TMP" ]] && ~/.acme.sh/acme.sh --remove -d "$SERVER_IP_TMP" --ecc 2>/dev/null || true
-    crontab -l 2>/dev/null | grep -v acme.sh | crontab - 2>/dev/null || true
+    crontab -l 2>/dev/null | grep -v '/\.acme\.sh/acme\.sh' | crontab - 2>/dev/null || true
 else
     # IP режим: x-ui обслуживает SSL сам через IP-сертификат от установщика.
     # Настраиваем acme.sh на корректное обновление: останавливаем nginx
     # перед renewal (нужен порт 80 для standalone), запускаем после.
-    SERVER_IP_TMP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
     if [[ -n "$SERVER_IP_TMP" && -f ~/.acme.sh/acme.sh ]]; then
         ~/.acme.sh/acme.sh --install-cert -d "$SERVER_IP_TMP" \
             --pre-hook  "systemctl stop nginx" \
@@ -370,10 +383,13 @@ systemctl start x-ui
 
 # Ожидаем запуска x-ui на заданном порту
 info "Ожидание запуска 3X-UI..."
-for i in $(seq 1 30); do
+for i in {1..30}; do
     curl -s --max-time 2 "http://127.0.0.1:$PANEL_PORT" >/dev/null 2>&1 && break
     sleep 1
 done
+
+systemctl is-active --quiet x-ui \
+    || error "3X-UI не запустился — проверьте: journalctl -u x-ui -n 50"
 
 if [[ "$PANEL_MODE" == "ip" ]]; then
     log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
@@ -413,11 +429,12 @@ server {
     root  /var/www/$REALITY_DOMAIN;
     index index.html;
 
+    location /.well-known/acme-challenge/ { root /var/www/html; }
     location / { try_files \$uri \$uri/ =404; }
 
     server_tokens off;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
 }
 NGINXEOF
 
@@ -462,7 +479,7 @@ fi
 rm -f /etc/nginx/sites-enabled/default
 
 nginx -t || error "Ошибка конфигурации Nginx"
-systemctl reload nginx
+systemctl restart nginx
 log "Nginx настроен"
 
 # ================================================================
@@ -559,6 +576,7 @@ log "Ротация логов настроена"
 step "13 — Резервное копирование"
 BACKUP_DIR="/var/backups/vpn"
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 
 cat > /usr/local/bin/vpn-backup.sh << BKEOF
 #!/bin/bash
@@ -597,31 +615,33 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║            УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО                   ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+echo "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
+echo "${GREEN}║            УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО                   ║${NC}"
+echo "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${BLUE}━━━ Параметры сервера ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo "${BLUE}━━━ Параметры сервера ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo "  IP сервера    : $SERVER_IP"
 echo "  Reality домен : $REALITY_DOMAIN"
 echo ""
-echo -e "${BLUE}━━━ Панель управления 3X-UI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo "${BLUE}━━━ Панель управления 3X-UI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo "  URL           : $PANEL_URL"
 echo "  Логин         : $PANEL_USER"
 echo "  Пароль        : $PANEL_PASS"
 echo ""
-echo -e "${BLUE}━━━ Порты для inbound (настройте вручную в панели) ━━━━━━━━${NC}"
+echo "${BLUE}━━━ Порты для inbound (настройте вручную в панели) ━━━━━━━━${NC}"
 echo "  VLESS+Reality : $XRAY_PORT   (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)"
 echo "  Trojan+Reality: $TROJAN_PORT  (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)"
 echo ""
-echo -e "${BLUE}━━━ Состояние сервисов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-systemctl is-active --quiet x-ui     && echo -e "  x-ui     : ${GREEN}работает${NC}" || echo -e "  x-ui     : ${RED}остановлен${NC}"
-systemctl is-active --quiet nginx    && echo -e "  nginx    : ${GREEN}работает${NC}" || echo -e "  nginx    : ${RED}остановлен${NC}"
-systemctl is-active --quiet fail2ban && echo -e "  fail2ban : ${GREEN}работает${NC}" || echo -e "  fail2ban : ${RED}остановлен${NC}"
+echo "${BLUE}━━━ Состояние сервисов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+systemctl is-active --quiet x-ui     && echo "  x-ui     : ${GREEN}работает${NC}" || echo "  x-ui     : ${RED}остановлен${NC}"
+systemctl is-active --quiet nginx    && echo "  nginx    : ${GREEN}работает${NC}" || echo "  nginx    : ${RED}остановлен${NC}"
+systemctl is-active --quiet fail2ban && echo "  fail2ban : ${GREEN}работает${NC}" || echo "  fail2ban : ${RED}остановлен${NC}"
 echo ""
-echo -e "${YELLOW}Параметры также сохранены в /root/vpn-install-info.txt${NC}"
+echo "${YELLOW}Параметры также сохранены в /root/vpn-install-info.txt${NC}"
 echo ""
 
+# Создаём файл с нужными правами ДО записи чувствительных данных
+install -m 600 /dev/null /root/vpn-install-info.txt
 cat > /root/vpn-install-info.txt << INFOEOF
 VPN TOPGUN — параметры установки
 ====================================
@@ -638,5 +658,4 @@ Reality домен     : $REALITY_DOMAIN
   VLESS+Reality   : $XRAY_PORT  (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)
   Trojan+Reality  : $TROJAN_PORT (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)
 INFOEOF
-chmod 600 /root/vpn-install-info.txt
 log "Параметры сохранены в /root/vpn-install-info.txt"
