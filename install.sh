@@ -25,8 +25,7 @@ step()  {
     echo -e "${BLUE}══════════════════════════════════════════${NC}"
 }
 
-# FIX: cleanup при Ctrl+C или SIGTERM
-trap 'rm -f /tmp/x-ui-cookie.txt; echo ""; warn "Установка прервана."; exit 1' INT TERM
+trap 'echo ""; warn "Установка прервана."; exit 1' INT TERM
 
 # ================================================================
 # Запрос SSL сертификата
@@ -73,7 +72,7 @@ read -rsp "$(echo -e "${YELLOW}Пароль для панели 3X-UI (мин. 8
 echo ""
 
 # ================================================================
-# Валидация ввода (FIX: добавлена проверка формата домена)
+# Валидация ввода
 # ================================================================
 validate_domain() {
     [[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$ ]] \
@@ -114,7 +113,6 @@ read -rp "Продолжить установку? [y/N]: " CONFIRM
 # ================================================================
 step "1 — Обновление системы"
 export DEBIAN_FRONTEND=noninteractive
-# Подавляем интерактивные паузы needrestart после apt-get
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
 apt-get update -q
@@ -122,6 +120,7 @@ apt-get upgrade -yq
 apt-get install -yq \
     curl wget unzip jq ufw fail2ban \
     certbot python3-certbot-nginx nginx sqlite3 \
+    python3-bcrypt \
     ca-certificates gnupg lsb-release
 log "Система обновлена, пакеты установлены"
 
@@ -174,7 +173,6 @@ ufw allow 443/tcp   comment 'HTTPS Nginx'
 ufw allow "$XRAY_PORT"/tcp   comment 'Xray VLESS Reality'
 ufw allow "$TROJAN_PORT"/tcp comment 'Trojan Reality'
 ufw allow from 127.0.0.1 to any port "$PANEL_PORT" comment '3X-UI panel local only'
-# FIX: || true — ufw enable возвращает ненулевой код если уже включён
 echo "y" | ufw enable || true
 log "UFW настроен"
 
@@ -247,7 +245,6 @@ ln -sf /etc/nginx/sites-available/certbot-temp /etc/nginx/sites-enabled/certbot-
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
-# FIX: get_ssl_cert() устраняет дублирование двух идентичных certbot-вызовов
 get_ssl_cert "$REALITY_DOMAIN"
 get_ssl_cert "$PANEL_DOMAIN"
 
@@ -259,10 +256,9 @@ log "SSL сертификаты получены"
 # ================================================================
 step "7 — Установка 3X-UI"
 
-# FIX: останавливаем Nginx перед установкой — 3X-UI занимает порт 80 для acme.sh
+# 3X-UI installer использует порт 80 для acme.sh — освобождаем его
 systemctl stop nginx 2>/dev/null || true
 
-# FIX: скачиваем во временный файл с --fail чтобы поймать ошибки HTTP
 INSTALL_SCRIPT=$(mktemp)
 curl -fsSL --max-time 60 \
     https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh \
@@ -285,12 +281,12 @@ log "3X-UI установлен"
 step "8 — Настройка параметров 3X-UI"
 X_UI_DB="/etc/x-ui/x-ui.db"
 
-# FIX: polling готовности БД с выводом прогресса; проверяем что sqlite3 может открыть БД
+# Ждём пока x-ui инициализирует БД, затем останавливаем его перед записью.
+# Важно: x-ui хранит настройки в памяти и сбрасывает их в БД при остановке.
+# Если писать в БД пока он работает — он перетрёт наши изменения при shutdown.
 info "Ожидание инициализации 3X-UI..."
 for i in $(seq 1 60); do
-    if sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1; then
-        break
-    fi
+    sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1 && break
     echo -ne "\r  Ожидание БД... [${i}/60]   "
     sleep 1
 done
@@ -298,34 +294,31 @@ echo ""
 sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1 \
     || error "БД 3X-UI не инициализирована за 60 сек: $X_UI_DB"
 
-# Применяем логин/пароль через x-ui CLI
-x-ui setting -username "$PANEL_USER" -password "$PANEL_PASS" > /dev/null 2>&1 || true
+# Останавливаем x-ui — теперь БД наша, записи не будут перетёрты
+systemctl stop x-ui
 
-# FIX: порт и путь ставим только через sqlite3 — x-ui CLI игнорирует -port в v2.8+
-# FIX: DELETE+INSERT вместо UPDATE — избегаем дублирующих записей
-# (3X-UI installer создаёт свои записи, UPDATE по несуществующему ключу — тихий no-op)
-sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webPort';     INSERT INTO settings(key,value) VALUES('webPort','$PANEL_PORT');"     2>/dev/null || true
-sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webBasePath'; INSERT INTO settings(key,value) VALUES('webBasePath','$PANEL_PATH');" 2>/dev/null || true
-sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webCertFile'; INSERT INTO settings(key,value) VALUES('webCertFile','');"            2>/dev/null || true
-sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webKeyFile';  INSERT INTO settings(key,value) VALUES('webKeyFile','');"             2>/dev/null || true
+# Credentials: bcrypt-хеш напрямую в таблицу users
+PASS_HASH=$(printf '%s' "$PANEL_PASS" | python3 -c "import bcrypt,sys; p=sys.stdin.buffer.read(); print(bcrypt.hashpw(p,bcrypt.gensalt(10)).decode())" 2>/dev/null)
+if [[ -n "$PASS_HASH" ]]; then
+    sqlite3 "$X_UI_DB" "DELETE FROM users; INSERT INTO users(id,username,password) VALUES(1,'$PANEL_USER','$PASS_HASH');"
+else
+    warn "Не удалось создать bcrypt хеш — смените пароль в панели вручную"
+fi
 
-systemctl restart x-ui
+# Порт, путь, отключение встроенного SSL (используем Nginx)
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webPort';     INSERT INTO settings(key,value) VALUES('webPort','$PANEL_PORT');"
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webBasePath'; INSERT INTO settings(key,value) VALUES('webBasePath','$PANEL_PATH');"
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webCertFile'; INSERT INTO settings(key,value) VALUES('webCertFile','');"
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webKeyFile';  INSERT INTO settings(key,value) VALUES('webKeyFile','');"
 
-# Читаем фактический порт после перезапуска (на случай если sqlite3 не применился)
-info "Ожидание запуска 3X-UI API..."
+systemctl start x-ui
+
+# Ожидаем запуска x-ui на заданном порту
+info "Ожидание запуска 3X-UI..."
 for i in $(seq 1 30); do
-    if curl -s --max-time 2 "http://127.0.0.1:$PANEL_PORT" >/dev/null 2>&1; then
-        break
-    fi
+    curl -s --max-time 2 "http://127.0.0.1:$PANEL_PORT" >/dev/null 2>&1 && break
     sleep 1
 done
-
-# FIX: если порт всё ещё не наш — читаем реальный из x-ui settings
-ACTUAL_PORT=$(x-ui settings 2>/dev/null | awk '/^port:/{print $2}' | tr -d '[:space:]')
-if [[ -n "$ACTUAL_PORT" && "$ACTUAL_PORT" != "$PANEL_PORT" ]]; then
-    warn "x-ui запустился на порту $ACTUAL_PORT вместо $PANEL_PORT — используем $ACTUAL_PORT"
-    PANEL_PORT="$ACTUAL_PORT"
-fi
 
 log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
 
@@ -334,7 +327,6 @@ log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
 # ================================================================
 step "9 — Настройка Nginx"
 
-# FIX: общий SSL-сниппет устраняет дублирование 4 строк в каждом vhost
 mkdir -p /etc/nginx/snippets
 cat > /etc/nginx/snippets/vpn-ssl.conf << 'EOF'
 ssl_protocols       TLSv1.2 TLSv1.3;
@@ -371,7 +363,6 @@ server {
 NGINXEOF
 
 # ---- Панель домен (reverse proxy к 3X-UI) ----
-# FIX: два идентичных location-блока объединены в один через ^~
 cat > "/etc/nginx/sites-available/$PANEL_DOMAIN" << NGINXEOF
 server {
     listen 80;
@@ -414,7 +405,7 @@ systemctl reload nginx
 log "Nginx настроен для обоих доменов"
 
 # ================================================================
-# Шаг 13: Автообновление SSL сертификатов
+# Шаг 10: Автообновление SSL сертификатов
 # ================================================================
 step "10 — Автообновление SSL сертификатов"
 cat > /etc/cron.d/certbot-renew << 'EOF'
@@ -423,14 +414,13 @@ EOF
 log "Автообновление сертификатов настроено (ежедневно в 3:00)"
 
 # ================================================================
-# Шаг 14: Watchdog для x-ui и nginx
+# Шаг 11: Watchdog для x-ui и nginx
 # ================================================================
 step "11 — Watchdog сервис"
 cat > /usr/local/bin/vpn-watchdog.sh << 'WDEOF'
 #!/bin/bash
 LOG="/var/log/vpn-watchdog.log"
 
-# FIX: timestamp вычисляется внутри каждой записи, а не один раз при старте
 log_ts() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"; }
 
 if ! systemctl is-active --quiet x-ui; then
@@ -474,7 +464,7 @@ systemctl start vpn-watchdog.timer
 log "Watchdog настроен (проверка каждые 5 минут)"
 
 # ================================================================
-# Шаг 15: Ротация логов
+# Шаг 12: Ротация логов
 # ================================================================
 step "12 — Ротация логов"
 cat > /etc/logrotate.d/vpn-watchdog << 'EOF'
@@ -503,7 +493,7 @@ EOF
 log "Ротация логов настроена"
 
 # ================================================================
-# Шаг 16: Резервное копирование конфигурации
+# Шаг 13: Резервное копирование конфигурации
 # ================================================================
 step "13 — Резервное копирование"
 BACKUP_DIR="/var/backups/vpn"
@@ -522,7 +512,6 @@ tar -czf "\$BDIR/vpn_backup_\$TS.tar.gz" \
     /usr/local/bin/vpn-watchdog.sh \
     2>/dev/null
 
-# FIX: xargs -r — не запускать rm если список пустой (< 7 бэкапов)
 ls -t "\$BDIR"/vpn_backup_*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
 echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Бэкап: vpn_backup_\$TS.tar.gz" >> /var/log/vpn-backup.log
 BKEOF
@@ -533,13 +522,9 @@ cat > /etc/cron.d/vpn-backup << 'EOF'
 EOF
 log "Резервное копирование настроено (ежедневно в 4:00)"
 
-# Очистка
-rm -f /tmp/x-ui-cookie.txt
-
 # ================================================================
 # Финальный вывод
 # ================================================================
-# FIX: корректный fallback для SERVER_IP (была сломана логика ||)
 SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
 [[ -z "$SERVER_IP" ]] && SERVER_IP=$(hostname -I | awk '{print $1}')
 [[ -z "$SERVER_IP" ]] && SERVER_IP="<unknown>"
