@@ -298,10 +298,13 @@ echo ""
 sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1 \
     || error "БД 3X-UI не инициализирована за 60 сек: $X_UI_DB"
 
-# Применяем настройки через x-ui CLI (stdout → /dev/null — иначе печатает весь help-menu)
-x-ui setting -username "$PANEL_USER" -password "$PANEL_PASS" -port "$PANEL_PORT" > /dev/null 2>&1 || true
+# Применяем логин/пароль через x-ui CLI
+x-ui setting -username "$PANEL_USER" -password "$PANEL_PASS" > /dev/null 2>&1 || true
 
-# FIX: параметризованный запрос предотвращает SQL injection в PANEL_PATH
+# FIX: порт и путь ставим только через sqlite3 — x-ui CLI игнорирует -port в v2.8+
+sqlite3 "$X_UI_DB" \
+    "UPDATE settings SET value=? WHERE key='webPort';" \
+    "$PANEL_PORT" 2>/dev/null || true
 sqlite3 "$X_UI_DB" \
     "UPDATE settings SET value=? WHERE key='webBasePath';" \
     "$PANEL_PATH" 2>/dev/null || true
@@ -316,7 +319,7 @@ sqlite3 "$X_UI_DB" \
 
 systemctl restart x-ui
 
-# FIX: polling готовности API вместо фиксированного sleep 5+5
+# Читаем фактический порт после перезапуска (на случай если sqlite3 не применился)
 info "Ожидание запуска 3X-UI API..."
 for i in $(seq 1 30); do
     if curl -s --max-time 2 "http://127.0.0.1:$PANEL_PORT" >/dev/null 2>&1; then
@@ -324,6 +327,13 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# FIX: если порт всё ещё не наш — читаем реальный из x-ui settings
+ACTUAL_PORT=$(x-ui settings 2>/dev/null | awk '/^port:/{print $2}' | tr -d '[:space:]')
+if [[ -n "$ACTUAL_PORT" && "$ACTUAL_PORT" != "$PANEL_PORT" ]]; then
+    warn "x-ui запустился на порту $ACTUAL_PORT вместо $PANEL_PORT — используем $ACTUAL_PORT"
+    PANEL_PORT="$ACTUAL_PORT"
+fi
 
 log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
 
