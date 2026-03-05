@@ -294,17 +294,24 @@ log "SSL сертификаты получены"
 # ================================================================
 step "7 — Установка 3X-UI"
 
+# FIX: останавливаем Nginx перед установкой — 3X-UI занимает порт 80 для acme.sh
+systemctl stop nginx 2>/dev/null || true
+
 # FIX: скачиваем во временный файл с --fail чтобы поймать ошибки HTTP
 INSTALL_SCRIPT=$(mktemp)
 curl -fsSL --max-time 60 \
     https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh \
     -o "$INSTALL_SCRIPT" \
     || error "Не удалось загрузить установщик 3X-UI (проверьте интернет-соединение)"
+# Передаём "n" чтобы пропустить интерактивный SSL-wizard установщика
 bash "$INSTALL_SCRIPT" <<< "n"
 rm -f "$INSTALL_SCRIPT"
 
 systemctl enable x-ui
 systemctl start x-ui || true
+
+# Возвращаем Nginx
+systemctl start nginx || true
 log "3X-UI установлен"
 
 # ================================================================
@@ -352,14 +359,18 @@ log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
 # ================================================================
 step "9 — Генерация ключей Reality"
 
-# FIX: прямая проверка известных путей вместо find по всему дереву
+# FIX: xray в 3X-UI v2.8+ называется xray-linux-amd64, проверяем оба имени
 XRAY_BIN=""
-for _path in "/usr/local/x-ui/bin/xray" "/usr/bin/xray" "/usr/local/bin/xray"; do
+for _path in \
+    "/usr/local/x-ui/bin/xray" \
+    "/usr/local/x-ui/bin/xray-linux-amd64" \
+    "/usr/bin/xray" \
+    "/usr/local/bin/xray"; do
     [[ -f "$_path" ]] && XRAY_BIN="$_path" && break
 done
-# fallback: find
+# fallback: find по любому имени xray*
 [[ -z "$XRAY_BIN" ]] && \
-    XRAY_BIN=$(find /usr/local/x-ui/ /usr/bin/ /usr/local/bin/ -name "xray" -type f 2>/dev/null | head -1 || true)
+    XRAY_BIN=$(find /usr/local/x-ui/ /usr/bin/ /usr/local/bin/ -name "xray*" -type f -perm /111 2>/dev/null | head -1 || true)
 [[ -z "$XRAY_BIN" || ! -f "$XRAY_BIN" ]] && \
     error "Xray бинарник не найден — убедитесь что 3X-UI установлен"
 
