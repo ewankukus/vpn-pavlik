@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================================================
-#  VPN Frankfurt — автоматическая установка по ТЗ v2.1
+#  VPN TOPGUN — автоматическая установка
 #  Стек: 3X-UI + Xray-core (VLESS+Reality self-steal) + Nginx + Let's Encrypt
 #  ОС:   Ubuntu 22.04 / 24.04
 # ================================================================
@@ -57,13 +57,13 @@ fi
 echo -e "${BLUE}"
 cat << 'BANNER'
   ╔══════════════════════════════════════════╗
-  ║   VPN Frankfurt  —  установка v2.1       ║
+  ║          VPN TOPGUN — установка          ║
   ╚══════════════════════════════════════════╝
 BANNER
 echo -e "${NC}"
 
-read -rp  "$(echo -e "${YELLOW}Домен для Reality/Nginx (например: vpn.example.com):    ${NC}")" REALITY_DOMAIN
-read -rp  "$(echo -e "${YELLOW}Домен для панели 3X-UI  (например: panel.example.com): ${NC}")" PANEL_DOMAIN
+read -rp  "$(echo -e "${YELLOW}Домен для Reality/Nginx (например: domain1.ru):         ${NC}")" REALITY_DOMAIN
+read -rp  "$(echo -e "${YELLOW}Домен для панели 3X-UI  (например: domain2.ru):         ${NC}")" PANEL_DOMAIN
 read -rp  "$(echo -e "${YELLOW}Email для Let's Encrypt:                                ${NC}")" LE_EMAIL
 read -rp  "$(echo -e "${YELLOW}Секретный путь к панели (например: /xk92mf):            ${NC}")" PANEL_PATH
 read -rp  "$(echo -e "${YELLOW}Логин для панели 3X-UI  [по умолч.: admin]:             ${NC}")" PANEL_USER
@@ -557,7 +557,7 @@ echo ""
 
 # Сохраняем параметры в файл
 cat > /root/vpn-install-info.txt << INFOEOF
-VPN Frankfurt — параметры установки
+VPN TOPGUN — параметры установки
 ====================================
 Дата установки    : $(date)
 IP сервера        : $SERVER_IP
