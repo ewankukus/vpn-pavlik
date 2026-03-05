@@ -302,20 +302,12 @@ sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1 \
 x-ui setting -username "$PANEL_USER" -password "$PANEL_PASS" > /dev/null 2>&1 || true
 
 # FIX: порт и путь ставим только через sqlite3 — x-ui CLI игнорирует -port в v2.8+
-sqlite3 "$X_UI_DB" \
-    "UPDATE settings SET value=? WHERE key='webPort';" \
-    "$PANEL_PORT" 2>/dev/null || true
-sqlite3 "$X_UI_DB" \
-    "UPDATE settings SET value=? WHERE key='webBasePath';" \
-    "$PANEL_PATH" 2>/dev/null || true
-
-# FIX: отключаем SSL на панели — она работает только через Nginx reverse proxy.
-# 3X-UI installer принудительно ставит SSL; если его не убрать,
-# proxy_pass http://127.0.0.1:$PANEL_PORT вернёт 502.
-sqlite3 "$X_UI_DB" \
-    "UPDATE settings SET value='' WHERE key='webCertFile';" 2>/dev/null || true
-sqlite3 "$X_UI_DB" \
-    "UPDATE settings SET value='' WHERE key='webKeyFile';" 2>/dev/null || true
+# FIX: DELETE+INSERT вместо UPDATE — избегаем дублирующих записей
+# (3X-UI installer создаёт свои записи, UPDATE по несуществующему ключу — тихий no-op)
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webPort';     INSERT INTO settings(key,value) VALUES('webPort','$PANEL_PORT');"     2>/dev/null || true
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webBasePath'; INSERT INTO settings(key,value) VALUES('webBasePath','$PANEL_PATH');" 2>/dev/null || true
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webCertFile'; INSERT INTO settings(key,value) VALUES('webCertFile','');"            2>/dev/null || true
+sqlite3 "$X_UI_DB" "DELETE FROM settings WHERE key='webKeyFile';  INSERT INTO settings(key,value) VALUES('webKeyFile','');"             2>/dev/null || true
 
 systemctl restart x-ui
 
