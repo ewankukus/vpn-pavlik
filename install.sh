@@ -64,24 +64,25 @@ echo -e "${NC}"
 
 read -rp  "$(echo -e "${YELLOW}Домен для Reality/Nginx (например: domain1.ru):         ${NC}")" REALITY_DOMAIN
 read -rp  "$(echo -e "${YELLOW}Email для Let's Encrypt:                                ${NC}")" LE_EMAIL
-read -rp  "$(echo -e "${YELLOW}Секретный путь к панели (например: /xk92mf):            ${NC}")" PANEL_PATH
 read -rp  "$(echo -e "${YELLOW}Логин для панели 3X-UI  [по умолч.: admin]:             ${NC}")" PANEL_USER
 PANEL_USER=${PANEL_USER:-admin}
 read -rsp "$(echo -e "${YELLOW}Пароль для панели 3X-UI (мин. 8 символов):             ${NC}")" PANEL_PASS
 echo ""
 echo ""
 echo -e "${YELLOW}Режим панели:${NC}"
-echo "  1) Domain — панель за Nginx (https://domain/path), нужен отдельный домен"
-echo "  2) IP     — панель напрямую (https://IP:порт/path), домен не нужен"
+echo "  1) Domain — панель за Nginx (https://domain2.ru), нужен отдельный домен"
+echo "  2) IP     — панель напрямую (https://IP:порт/путь), домен не нужен"
 read -rp "$(echo -e "${YELLOW}Выберите режим [1/2]:                                   ${NC}")" MODE_INPUT
 echo ""
 
 if [[ "$MODE_INPUT" == "1" ]]; then
     PANEL_MODE="domain"
     read -rp "$(echo -e "${YELLOW}Домен для панели 3X-UI  (например: domain2.ru):         ${NC}")" PANEL_DOMAIN
+    PANEL_PATH="/"
 elif [[ "$MODE_INPUT" == "2" ]]; then
     PANEL_MODE="ip"
     PANEL_DOMAIN=""
+    read -rp "$(echo -e "${YELLOW}Секретный путь к панели (например: /xk92mf):            ${NC}")" PANEL_PATH
 else
     error "Выберите 1 или 2"
 fi
@@ -96,7 +97,6 @@ validate_domain() {
 
 [[ -z "$REALITY_DOMAIN" ]] && error "Домен Reality не может быть пустым"
 [[ -z "$LE_EMAIL" ]]        && error "Email не может быть пустым"
-[[ -z "$PANEL_PATH" ]]      && error "Секретный путь не может быть пустым"
 [[ -z "$PANEL_PASS" ]]      && error "Пароль не может быть пустым"
 [[ ${#PANEL_PASS} -lt 8 ]]  && error "Пароль должен быть не менее 8 символов"
 validate_domain "$REALITY_DOMAIN" || error "Невалидный домен: $REALITY_DOMAIN"
@@ -105,10 +105,11 @@ validate_domain "$REALITY_DOMAIN" || error "Невалидный домен: $RE
 if [[ "$PANEL_MODE" == "domain" ]]; then
     [[ -z "$PANEL_DOMAIN" ]] && error "Домен панели не может быть пустым"
     validate_domain "$PANEL_DOMAIN" || error "Невалидный домен: $PANEL_DOMAIN"
+else
+    [[ -z "$PANEL_PATH" ]] && error "Секретный путь не может быть пустым"
+    # Добавить / в начало пути если нет
+    [[ "$PANEL_PATH" != /* ]] && PANEL_PATH="/$PANEL_PATH"
 fi
-
-# Добавить / в начало пути если нет
-[[ "$PANEL_PATH" != /* ]] && PANEL_PATH="/$PANEL_PATH"
 
 # Порты
 XRAY_PORT=8443
@@ -121,9 +122,9 @@ if [[ "$PANEL_MODE" == "domain" ]]; then
     echo "  Панель домен  : $PANEL_DOMAIN"
 else
     echo "  Режим панели  : IP (порт $PANEL_PORT)"
+    echo "  Путь панели   : $PANEL_PATH"
 fi
 echo "  Email         : $LE_EMAIL"
-echo "  Путь панели   : $PANEL_PATH"
 echo "  Порт Xray     : $XRAY_PORT"
 echo "  Порт Trojan   : $TROJAN_PORT"
 echo "  Порт панели   : $PANEL_PORT"
@@ -374,7 +375,11 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
+if [[ "$PANEL_MODE" == "ip" ]]; then
+    log "3X-UI настроен: порт $PANEL_PORT, путь $PANEL_PATH"
+else
+    log "3X-UI настроен: порт $PANEL_PORT"
+fi
 
 # ================================================================
 # Шаг 9: Настройка Nginx
@@ -437,9 +442,7 @@ server {
 
     server_tokens off;
 
-    location / { return 404; }
-
-    location ^~ $PANEL_PATH {
+    location / {
         proxy_pass         http://127.0.0.1:$PANEL_PORT;
         proxy_set_header   Host              \$host;
         proxy_set_header   X-Real-IP         \$remote_addr;
@@ -588,7 +591,7 @@ SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
 [[ -z "$SERVER_IP" ]] && SERVER_IP="<unknown>"
 
 if [[ "$PANEL_MODE" == "domain" ]]; then
-    PANEL_URL="https://$PANEL_DOMAIN$PANEL_PATH"
+    PANEL_URL="https://$PANEL_DOMAIN"
 else
     PANEL_URL="https://$SERVER_IP:$PANEL_PORT$PANEL_PATH"
 fi
