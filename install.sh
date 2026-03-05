@@ -629,8 +629,13 @@ echo "  Логин         : $PANEL_USER"
 echo "  Пароль        : $PANEL_PASS"
 echo ""
 echo "${BLUE}━━━ Порты для inbound (настройте вручную в панели) ━━━━━━━━${NC}"
-echo "  VLESS+Reality : $XRAY_PORT   (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)"
-echo "  Trojan+Reality: $TROJAN_PORT  (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)"
+echo "  VLESS+Reality : порт $XRAY_PORT"
+echo "  Trojan+Reality: порт $TROJAN_PORT"
+echo ""
+echo "${YELLOW}  Reality настройки (в панели → Transmission → Reality):${NC}"
+echo "    dest : 127.0.0.1:443"
+echo "    SNI  : популярный домен, напр. www.microsoft.com"
+echo "    uTLS : chrome"
 echo ""
 echo "${BLUE}━━━ Состояние сервисов ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 systemctl is-active --quiet x-ui     && echo "  x-ui     : ${GREEN}работает${NC}" || echo "  x-ui     : ${RED}остановлен${NC}"
@@ -655,7 +660,12 @@ Reality домен     : $REALITY_DOMAIN
   Пароль          : $PANEL_PASS
 
 Порты для inbound (настройте в панели):
-  VLESS+Reality   : $XRAY_PORT  (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)
-  Trojan+Reality  : $TROJAN_PORT (SNI: $REALITY_DOMAIN, dest: 127.0.0.1:443)
+  VLESS+Reality   : порт $XRAY_PORT
+  Trojan+Reality  : порт $TROJAN_PORT
+
+Reality настройки (Transmission → Reality):
+  dest : 127.0.0.1:443
+  SNI  : популярный домен, напр. www.microsoft.com  ← НЕ ваш домен!
+  uTLS : chrome
 INFOEOF
 log "Параметры сохранены в /root/vpn-install-info.txt"
