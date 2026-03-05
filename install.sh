@@ -152,6 +152,9 @@ read -rp "Продолжить установку? [y/N]: " CONFIRM
 # ================================================================
 step "1 — Обновление системы"
 export DEBIAN_FRONTEND=noninteractive
+# Подавляем интерактивные паузы needrestart после apt-get
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 apt-get update -q
 apt-get upgrade -yq
 apt-get install -yq \
@@ -323,23 +326,31 @@ X_UI_DB="/etc/x-ui/x-ui.db"
 # FIX: polling готовности БД с выводом прогресса; проверяем что sqlite3 может открыть БД
 info "Ожидание инициализации 3X-UI..."
 for i in $(seq 1 60); do
-    if sqlite3 "$X_UI_DB" "SELECT 1;" 2>/dev/null; then
+    if sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1; then
         break
     fi
     echo -ne "\r  Ожидание БД... [${i}/60]   "
     sleep 1
 done
 echo ""
-sqlite3 "$X_UI_DB" "SELECT 1;" 2>/dev/null \
+sqlite3 "$X_UI_DB" "SELECT 1;" > /dev/null 2>&1 \
     || error "БД 3X-UI не инициализирована за 60 сек: $X_UI_DB"
 
-# Применяем настройки через x-ui CLI
-x-ui setting -username "$PANEL_USER" -password "$PANEL_PASS" -port "$PANEL_PORT" 2>/dev/null || true
+# Применяем настройки через x-ui CLI (stdout → /dev/null — иначе печатает весь help-menu)
+x-ui setting -username "$PANEL_USER" -password "$PANEL_PASS" -port "$PANEL_PORT" > /dev/null 2>&1 || true
 
 # FIX: параметризованный запрос предотвращает SQL injection в PANEL_PATH
 sqlite3 "$X_UI_DB" \
     "UPDATE settings SET value=? WHERE key='webBasePath';" \
     "$PANEL_PATH" 2>/dev/null || true
+
+# FIX: отключаем SSL на панели — она работает только через Nginx reverse proxy.
+# 3X-UI installer принудительно ставит SSL; если его не убрать,
+# proxy_pass http://127.0.0.1:$PANEL_PORT вернёт 502.
+sqlite3 "$X_UI_DB" \
+    "UPDATE settings SET value='' WHERE key='webCertFile';" 2>/dev/null || true
+sqlite3 "$X_UI_DB" \
+    "UPDATE settings SET value='' WHERE key='webKeyFile';" 2>/dev/null || true
 
 systemctl restart x-ui
 
