@@ -113,7 +113,7 @@ fi
 # Порты
 XRAY_PORT=8443
 TROJAN_PORT=2053
-PANEL_PORT=54321
+PANEL_PORT=$(shuf -i 10000-65000 -n 1)
 
 info "Параметры установки:"
 echo "  Reality домен : $REALITY_DOMAIN"
