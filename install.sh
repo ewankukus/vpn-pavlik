@@ -119,10 +119,14 @@ fi
 # Порты
 XRAY_PORT=443
 TROJAN_PORT=2053
+PANEL_NGINX_PORT=8443
 PANEL_PORT=$(shuf -i 10000-65000 -n 1)
 while ss -tlnH 2>/dev/null | grep -q ":${PANEL_PORT}"; do
     PANEL_PORT=$(shuf -i 10000-65000 -n 1)
 done
+if [[ "$PANEL_MODE" == "domain" ]] && ss -tlnH 2>/dev/null | grep -q ":${PANEL_NGINX_PORT}"; then
+    error "Порт $PANEL_NGINX_PORT (панель HTTPS) уже занят. Освободите его и повторите установку."
+fi
 
 info "Параметры установки:"
 echo "  Reality домен : $REALITY_DOMAIN"
@@ -206,8 +210,8 @@ ufw allow 443/tcp            comment 'HTTPS / Xray VLESS Reality'
 ufw allow "$TROJAN_PORT"/tcp comment 'Trojan Reality'
 
 if [[ "$PANEL_MODE" == "domain" ]]; then
-    # Панель на 8443 (443 занят Xray)
-    ufw allow 8443/tcp comment 'Panel domain HTTPS'
+    # Панель на $PANEL_NGINX_PORT (443 занят Xray)
+    ufw allow "$PANEL_NGINX_PORT"/tcp comment 'Panel domain HTTPS'
     ufw allow from 127.0.0.1 to any port "$PANEL_PORT" comment '3X-UI panel local only'
 else
     # Панель доступна напрямую по IP
@@ -435,11 +439,13 @@ if [[ "$PANEL_MODE" == "domain" ]]; then
 server {
     listen 80;
     server_name $PANEL_DOMAIN;
-    return 301 https://\$host:8443\$request_uri;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://\$host:${PANEL_NGINX_PORT}\$request_uri; }
 }
 
 server {
-    listen 8443 ssl http2;
+    listen ${PANEL_NGINX_PORT} ssl http2;
     server_name $PANEL_DOMAIN;
 
     ssl_certificate     /etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem;
@@ -598,7 +604,7 @@ SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
 [[ -z "$SERVER_IP" ]] && SERVER_IP="<unknown>"
 
 if [[ "$PANEL_MODE" == "domain" ]]; then
-    PANEL_URL="https://$PANEL_DOMAIN:8443"
+    PANEL_URL="https://$PANEL_DOMAIN:$PANEL_NGINX_PORT"
 else
     PANEL_URL="https://$SERVER_IP:$PANEL_PORT$PANEL_PATH"
 fi
